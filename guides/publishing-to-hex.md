@@ -179,8 +179,39 @@ releaser: [
 ## Prerequisites
 
 - Each app must have a `description` in its `mix.exs`
-- You must be authenticated: `mix hex.user auth`
 - The app must compile without errors
+- You must be authenticated to Hex (see below)
+
+### Hex authentication
+
+Releaser supports both auth modes that `mix hex.publish` accepts:
+
+**Local interactive auth** (good for personal machines):
+
+```bash
+mix hex.user auth
+# Prompts for username and password, then persists a token.
+```
+
+After that, `mix releaser.publish` just works.
+
+**Environment variable** (good for CI / one-off pushes):
+
+```bash
+HEX_API_KEY=<your_key> mix releaser.publish
+```
+
+Get a key at <https://hex.pm/dashboard/keys>. The value is an `auth` scoped
+key with `write` permission.
+
+If neither method is available, `mix releaser.publish` aborts with a clear
+message instead of hanging on the interactive password prompt.
+
+### Live output
+
+`mix releaser.publish` streams the output of `mix hex.publish` to your
+terminal in real time — you will see the upload progress, checksum, and
+URLs as Hex prints them, rather than a single buffered dump at the end.
 
 ## Before publishing: check status
 

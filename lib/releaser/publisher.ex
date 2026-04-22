@@ -150,6 +150,8 @@ defmodule Releaser.Publisher do
     config = Releaser.Config.load()
     pkg_defaults = config.publisher.package_defaults
 
+    ensure_hex_auth!()
+
     published = %{}
     backups = []
 
@@ -182,23 +184,17 @@ defmodule Releaser.Publisher do
           # 4. Write modified mix.exs
           File.write!(mix_path, content)
 
-          # 5. Publish
+          # 5. Publish (streaming output so the user sees progress live)
           UI.info("Publishing #{name} v#{new_version}...")
           org_args = if org, do: ["--organization", org], else: []
 
-          case System.cmd("mix", ["hex.publish", "--yes"] ++ org_args,
-                 cd: app.path,
-                 env: [{"MIX_ENV", "prod"}],
-                 stderr_to_stdout: true
-               ) do
-            {output, 0} ->
+          case run_streaming("mix", ["hex.publish", "--yes"] ++ org_args, app.path) do
+            0 ->
               UI.info("  #{UI.green("#{name} v#{new_version} published!")}")
-              Mix.shell().info(output)
               {Map.put(pub_acc, name, new_version), bkp_acc}
 
-            {output, code} ->
-              UI.error("Failed to publish #{name} (exit #{code}):")
-              Mix.shell().info(output)
+            code ->
+              UI.error("\nFailed to publish #{name} (exit #{code}).")
               UI.info("\n#{UI.yellow("Restoring all mix.exs files...")}")
               restore(bkp_acc)
               Mix.raise("Publish failed for #{name}. All mix.exs files have been restored.")
@@ -280,6 +276,120 @@ defmodule Releaser.Publisher do
     case Enum.find(apps, &(&1.name == name)) do
       %{version: v} -> v
       nil -> "0.0.0"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Hex auth + process streaming
+  # ---------------------------------------------------------------------------
+
+  # Verifies that Hex can authenticate, either via HEX_API_KEY in the env
+  # or via `mix hex.user whoami` (persisted local auth).
+  defp ensure_hex_auth! do
+    cond do
+      System.get_env("HEX_API_KEY") not in [nil, ""] ->
+        :ok
+
+      hex_user_authenticated?() ->
+        :ok
+
+      true ->
+        Mix.raise("""
+        Hex authentication not configured.
+
+        Pick one of:
+
+          1. Persisted local auth (interactive):
+             mix hex.user auth
+
+          2. Environment variable (CI-friendly):
+             HEX_API_KEY=<key> mix releaser.publish
+
+        Get a key at https://hex.pm/dashboard/keys
+        """)
+    end
+  end
+
+  defp hex_user_authenticated? do
+    # Run `mix hex.user whoami` with stdin closed (via Port without :use_stdio)
+    # so Hex cannot prompt interactively. We only want the authenticated-or-not
+    # status; any prompt means not authenticated.
+    port =
+      Port.open(
+        {:spawn_executable, System.find_executable("mix")},
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          :hide,
+          {:args, ["hex.user", "whoami"]}
+        ]
+      )
+
+    {output, status} = collect_port_output(port, "", 5_000)
+
+    status == 0 and
+      String.trim(output) != "" and
+      not String.contains?(output, "No authenticated user") and
+      not String.contains?(output, "authenticate now?")
+  rescue
+    _ -> false
+  end
+
+  defp collect_port_output(port, acc, timeout) do
+    receive do
+      {^port, {:data, chunk}} when is_binary(chunk) ->
+        collect_port_output(port, acc <> chunk, timeout)
+
+      {^port, {:exit_status, status}} ->
+        {acc, status}
+    after
+      timeout ->
+        # Anything that hangs longer than 5s is treated as "not authenticated".
+        send(self(), {port, {:exit_status, 1}})
+        Port.close(port)
+        {acc, 1}
+    end
+  end
+
+  # Runs a command in `cwd` and streams stdout/stderr to the parent process
+  # so the user sees `mix hex.publish` output live instead of buffered.
+  # Returns the exit status.
+  #
+  # Note: we intentionally do NOT force `MIX_ENV=prod` — `mix hex.publish`
+  # needs `ex_doc` available to build documentation, and ex_doc is typically
+  # declared as `only: :dev`. Letting the command inherit the caller's env
+  # keeps both docs and prod deps available.
+  defp run_streaming(cmd, args, cwd) do
+    port =
+      Port.open(
+        {:spawn_executable, System.find_executable(cmd)},
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          :hide,
+          {:args, args},
+          {:cd, cwd},
+          {:line, 4096}
+        ]
+      )
+
+    stream_port(port)
+  end
+
+  defp stream_port(port) do
+    receive do
+      {^port, {:data, {_eol_flag, line}}} ->
+        IO.puts(line)
+        stream_port(port)
+
+      {^port, {:data, data}} when is_binary(data) ->
+        IO.write(data)
+        stream_port(port)
+
+      {^port, {:exit_status, status}} ->
+        status
     end
   end
 end
