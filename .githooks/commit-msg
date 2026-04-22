@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+#
+# commit-msg hook — validates Conventional Commits.
+#
+# Requires: Elixir + Mix + this project's deps compiled.
+# Installed via `mix releaser.install_hooks`.
+#
+# Bypass (discouraged) with: git commit --no-verify
+
+exec mix releaser.check_commit_msg "$1"

@@ -29,6 +29,7 @@ defmodule Releaser.Cascade do
         path: app.path,
         old: app.version,
         new: new_version,
+        version_form: app.version_form,
         reason: :direct
       }
     ]
@@ -63,6 +64,7 @@ defmodule Releaser.Cascade do
                     path: dep_app.path,
                     old: dep_app.version,
                     new: new_v,
+                    version_form: dep_app.version_form,
                     reason: :cascade
                   }
                 ]

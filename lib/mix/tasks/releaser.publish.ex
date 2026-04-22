@@ -40,28 +40,52 @@ defmodule Mix.Tasks.Releaser.Publish do
     org = Keyword.get(opts, :org)
 
     publish_opts = [only: only, bump: bump_type, org: org]
-    %{levels: levels, apps: apps, graph: graph} = Publisher.plan(publish_opts)
+    %{levels: levels, apps: apps, graph: graph, skipped: skipped} = Publisher.plan(publish_opts)
 
     UI.info("\n#{UI.bright("=== Releaser Publish ===")}\n")
 
-    Enum.each(levels, fn {level, app_names} ->
-      UI.info(UI.bright("Level #{level}:"))
+    # Report skipped apps first so the user knows why some are missing.
+    if skipped != [] do
+      UI.info(UI.bright("Skipping (nothing new to publish):"))
 
-      Enum.each(app_names, fn name ->
-        app = Enum.find(apps, &(&1.name == name))
-        deps = Map.get(graph, name, [])
-        dep_str = if deps == [], do: "", else: " (deps: #{Enum.join(deps, ", ")})"
-        UI.info("  #{name} #{UI.yellow("v#{app.version}")}#{dep_str}")
+      Enum.each(skipped, fn %{app: name, local: local, hex: hex, reason: reason} ->
+        label =
+          case reason do
+            :already_published ->
+              "already on Hex (local v#{local} matches Hex v#{hex || "?"})"
+
+            :prerelease ->
+              "pre-release local v#{local}"
+          end
+
+        UI.info("  #{name}  — #{label}")
       end)
 
       UI.info("")
-    end)
+    end
 
-    if dry_run? do
-      UI.info("#{UI.cyan("--dry-run: nothing will be published")}\n")
-      show_dry_run(levels, apps, graph, bump_type)
+    if levels == [] do
+      UI.info(UI.green("All apps are up to date on Hex. Nothing to publish.\n"))
     else
-      Publisher.execute(publish_opts)
+      Enum.each(levels, fn {level, app_names} ->
+        UI.info(UI.bright("Level #{level}:"))
+
+        Enum.each(app_names, fn name ->
+          app = Enum.find(apps, &(&1.name == name))
+          deps = Map.get(graph, name, [])
+          dep_str = if deps == [], do: "", else: " (deps: #{Enum.join(deps, ", ")})"
+          UI.info("  #{name} #{UI.yellow("v#{app.version}")}#{dep_str}")
+        end)
+
+        UI.info("")
+      end)
+
+      if dry_run? do
+        UI.info("#{UI.cyan("--dry-run: nothing will be published")}\n")
+        show_dry_run(levels, apps, graph, bump_type)
+      else
+        Publisher.execute(publish_opts)
+      end
     end
   end
 

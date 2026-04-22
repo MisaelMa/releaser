@@ -98,16 +98,38 @@ defmodule Releaser.Version do
     version |> parse() |> bump(bump_type, opts) |> to_string()
   end
 
-  defp do_bump(%__MODULE__{pre_tag: current_tag, pre_num: n} = v, _bump_type, tag)
+  defp do_bump(%__MODULE__{pre_tag: current_tag, pre_num: n} = v, bump_type, tag)
        when current_tag == tag and not is_nil(tag) do
-    # Same tag: just increment (4.0.18-dev.1 → 4.0.18-dev.2)
-    %{v | pre_num: n + 1, build: nil}
+    # Same tag: behavior depends on whether bump_type changes the base.
+    #
+    # - :patch (or no explicit change) → iterate pre_num
+    #     (4.0.18-dev.1 → 4.0.18-dev.2) — we're still cooking the same base
+    # - :minor / :major → change base, reset pre_num to 1
+    #     (1.0.0-dev.1 --minor → 1.1.0-dev.1)
+    if changes_base?(bump_type) do
+      apply_bump_type(v, bump_type)
+      |> then(fn bumped -> %{bumped | pre_tag: tag, pre_num: 1, build: nil} end)
+    else
+      %{v | pre_num: n + 1, build: nil}
+    end
   end
 
-  defp do_bump(%__MODULE__{pre_tag: current_tag} = v, _bump_type, tag)
+  defp do_bump(%__MODULE__{pre_tag: current_tag} = v, bump_type, tag)
        when not is_nil(current_tag) and not is_nil(tag) do
-    # Different tag: keep base, switch tag (4.0.18-dev.3 → 4.0.18-beta.1)
-    %{v | pre_tag: tag, pre_num: 1, build: nil}
+    # Different tag: switching pre-release channel.
+    #
+    # - :patch → keep base, switch tag, pre_num = 1
+    #     (4.0.18-dev.3 → 4.0.18-beta.1)
+    # - :minor / :major → change base AND switch tag
+    #     (1.0.0-dev.3 --minor --tag beta → 1.1.0-beta.1)
+    base =
+      if changes_base?(bump_type) do
+        apply_bump_type(v, bump_type)
+      else
+        v
+      end
+
+    %{base | pre_tag: tag, pre_num: 1, build: nil}
   end
 
   defp do_bump(%__MODULE__{} = v, bump_type, nil) do
@@ -161,6 +183,13 @@ defmodule Releaser.Version do
   defp apply_bump_type(v, :major), do: %{v | major: v.major + 1, minor: 0, patch: 0}
   defp apply_bump_type(v, :minor), do: %{v | minor: v.minor + 1, patch: 0}
   defp apply_bump_type(v, :patch), do: %{v | patch: v.patch + 1}
+
+  # A pre-release iterates on the same base only when the bump type is :patch.
+  # :minor and :major move to a new base and reset the pre-release counter.
+  defp changes_base?(:major), do: true
+  defp changes_base?(:minor), do: true
+  defp changes_base?(:patch), do: false
+  defp changes_base?(_other), do: false
 
   defp bump_base(%__MODULE__{pre_tag: nil} = v), do: v
   defp bump_base(%__MODULE__{} = v), do: %{v | pre_tag: nil, pre_num: 0}

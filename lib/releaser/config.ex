@@ -29,6 +29,22 @@ defmodule Releaser.Config do
   - `:org` — Hex organization name (optional)
   - `:package_defaults` — Default `package/0` config injected into apps that lack it.
     Keys: `:licenses`, `:links`, `:files`
+
+  ## Commits (Conventional Commits)
+
+  Opt-in automation that parses `git log` to decide bump types per app.
+  Disabled unless you set `enabled: true`.
+
+      commits: [
+        enabled: true,
+        bump_rules: %{"feat" => :minor, "fix" => :patch, ...},
+        breaking_bump: :major,
+        breaking_markers: [:bang, :body],
+        scope_aliases: %{"xml" => "cfdi_xml"},
+        no_scope: :warn
+      ]
+
+  See `Releaser.Commits` and `guides/conventional-commits.md`.
   """
 
   @defaults %{
@@ -56,6 +72,28 @@ defmodule Releaser.Config do
         licenses: ["MIT"],
         links: %{},
         files: ~w(lib mix.exs README.md LICENSE)
+      }
+    },
+    commits: %{
+      enabled: false,
+      bump_rules: %{
+        "feat" => :minor,
+        "fix" => :patch,
+        "perf" => :patch,
+        "refactor" => :patch,
+        "revert" => :patch
+      },
+      breaking_bump: :major,
+      breaking_markers: [:bang, :body],
+      scope_aliases: %{},
+      no_scope: :warn,
+      validation: %{
+        strict_types: false,
+        strict_scopes: false,
+        allowed_types: ~w[docs chore test style build ci],
+        allowed_scopes: nil,
+        allow_no_scope: true,
+        max_subject_length: 100
       }
     }
   }

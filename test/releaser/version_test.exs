@@ -95,6 +95,24 @@ defmodule Releaser.VersionTest do
     end
   end
 
+  describe "bump/3 — same tag with base change" do
+    test "minor on pre-release bumps base and resets pre_num" do
+      assert Version.bump("1.0.0-dev.1", :minor, tag: "dev") == "1.1.0-dev.1"
+    end
+
+    test "major on pre-release bumps base and resets pre_num" do
+      assert Version.bump("1.0.0-dev.1", :major, tag: "dev") == "2.0.0-dev.1"
+    end
+
+    test "major after several iterations still resets pre_num" do
+      assert Version.bump("1.0.0-dev.5", :major, tag: "dev") == "2.0.0-dev.1"
+    end
+
+    test "minor on beta pre-release" do
+      assert Version.bump("2.3.4-beta.7", :minor, tag: "beta") == "2.4.0-beta.1"
+    end
+  end
+
   describe "bump/3 — tag change keeps base" do
     test "dev → beta" do
       assert Version.bump("4.0.18-dev.3", :patch, tag: "beta") == "4.0.18-beta.1"
@@ -110,6 +128,16 @@ defmodule Releaser.VersionTest do
 
     test "rc → beta (downgrade)" do
       assert Version.bump("2.0.0-rc.1", :patch, tag: "beta") == "2.0.0-beta.1"
+    end
+  end
+
+  describe "bump/3 — tag change with base change" do
+    test "dev minor → beta changes base and resets pre_num" do
+      assert Version.bump("1.0.0-dev.3", :minor, tag: "beta") == "1.1.0-beta.1"
+    end
+
+    test "dev major → rc" do
+      assert Version.bump("1.0.0-dev.3", :major, tag: "rc") == "2.0.0-rc.1"
     end
   end
 

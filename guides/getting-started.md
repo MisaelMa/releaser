@@ -146,6 +146,61 @@ end
 
 En este caso Releaser detecta un solo app y funciona para bump + changelog + publish (sin cascade porque no hay dependientes).
 
+## Dos caminos: manual o automatizado
+
+Releaser soporta **dos flujos de trabajo** igualmente válidos. Elige según
+tu equipo y proyecto — puedes empezar con uno y migrar al otro sin
+romper nada.
+
+### Camino A — Releases manuales (default)
+
+**No requiere configuración adicional**. Tú decides cada bump:
+
+```bash
+mix releaser.bump patch              # 1.0.0 → 1.0.1
+mix releaser.bump minor              # 1.0.1 → 1.1.0
+mix releaser.bump major              # 1.1.0 → 2.0.0
+```
+
+Formato de commits libre, sin hooks, sin CI obligatorio. Ver
+[Manual releases](./manual-releases.md).
+
+### Camino B — Conventional Commits (opt-in)
+
+Si adoptas [Conventional Commits](https://www.conventionalcommits.org/)
+(`feat:`, `fix:`, `feat!:`), Releaser puede leer tu historial de git y
+decidir el bump automáticamente:
+
+```elixir
+releaser: [
+  commits: [enabled: true]
+]
+```
+
+```bash
+# Analiza sin aplicar
+mix releaser.bump --suggest
+
+# Aplica automáticamente
+mix releaser.bump --from-commits --mode prerelease --tag dev
+```
+
+Incluye hook de git para rechazar commits mal formateados, GitHub
+Actions template, y flujo gitflow automatizado. Ver
+[Conventional Commits](./conventional-commits.md).
+
+### Comparación rápida
+
+|                              | Camino A (manual)     | Camino B (commits)     |
+|------------------------------|-----------------------|------------------------|
+| Config extra                 | Ninguna               | `commits: [enabled: true]` |
+| Quién decide el bump         | Tú                    | El parser de git log   |
+| Pre-commit hook              | —                     | Opcional (strict)      |
+| GitHub Actions               | Opcional              | Opcional (template incluido) |
+
+Todo el resto del releaser (cascade, publish, pre-releases, changelog)
+funciona igual en ambos caminos.
+
 ## Publish policy
 
 ### Qué es `publish: true`

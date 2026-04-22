@@ -17,18 +17,23 @@ defmodule Releaser.FileSync do
 
   @doc """
   Updates the version in `mix.exs` for the given app path.
+
+  The third positional argument is the new version. When the caller knows that
+  the version is declared as a module attribute (`@version "..."`) it should
+  pass `version_form: :attribute` so the correct token is rewritten. Defaults
+  to `:literal` (`version: "..."`).
   """
-  def update_mix_version(app_path, old_version, new_version) do
+  def update_mix_version(app_path, old_version, new_version, version_form \\ :literal) do
     mix_path = Path.join(app_path, "mix.exs")
     content = File.read!(mix_path)
 
-    updated =
-      String.replace(
-        content,
-        ~s(version: "#{old_version}"),
-        ~s(version: "#{new_version}"),
-        global: false
-      )
+    {old_token, new_token} =
+      case version_form do
+        :attribute -> {~s(@version "#{old_version}"), ~s(@version "#{new_version}")}
+        _ -> {~s(version: "#{old_version}"), ~s(version: "#{new_version}")}
+      end
+
+    updated = String.replace(content, old_token, new_token, global: false)
 
     File.write!(mix_path, updated)
   end

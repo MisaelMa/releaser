@@ -1,7 +1,7 @@
 defmodule Releaser.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.0.2"
   @source_url "https://github.com/MisaelMa/releaser"
 
   def project do
@@ -13,17 +13,45 @@ defmodule Releaser.MixProject do
       deps: deps(),
       package: package(),
       description: "Monorepo versioning, changelog, and Hex publishing for Elixir poncho/umbrella projects",
-      releaser: [publish: true],
+      releaser: [
+        apps_root: ".",
+        publish: true,
+        commits: [
+          enabled: true,
+          bump_rules: %{
+            "feat" => :minor,
+            "fix" => :patch,
+            "perf" => :patch,
+            "refactor" => :patch,
+            "revert" => :patch
+          },
+          breaking_bump: :major,
+          breaking_markers: [:bang, :body],
+          scope_aliases: %{
+            "rel" => "releaser",
+            "release" => "releaser"
+          },
+          no_scope: {:apply_to, "releaser"},
+          validation: [
+            strict_types: true,
+            strict_scopes: true,
+            allow_no_scope: true,
+            max_subject_length: 100
+          ]
+        ]
+      ],
       docs: [
         main: "readme",
         source_url: @source_url,
         extras: [
           "README.md",
           "guides/getting-started.md",
+          "guides/manual-releases.md",
           "guides/pre-release-tags.md",
           "guides/publishing-to-hex.md",
           "guides/changelog-and-hooks.md",
-          "guides/monorepo-patterns.md"
+          "guides/monorepo-patterns.md",
+          "guides/conventional-commits.md"
         ],
         groups_for_extras: [
           Guides: ~r/guides\/.*/

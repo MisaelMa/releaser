@@ -5,6 +5,20 @@ Monorepo versioning, changelog, and Hex publishing for Elixir poncho/umbrella pr
 The **only Hex package** that handles versioning + publishing for Elixir monorepos
 with internal dependencies. Think Rush (Node.js) but for Elixir.
 
+## Two workflows, both first-class
+
+Releaser supports two equally valid ways to drive releases:
+
+- **Manual** (default): you decide each bump. No extra config, free-form
+  commits. See [Manual releases](guides/manual-releases.md).
+- **Conventional Commits** (opt-in): add `commits: [enabled: true]` and
+  Releaser reads `git log` to decide bumps automatically. Includes
+  pre-commit hook and GitHub Actions template. See
+  [Conventional Commits](guides/conventional-commits.md).
+
+Pick whichever fits your team — cascade, pre-releases, publishing and
+changelogs work the same in both.
+
 ## Features
 
 | Feature | Releaser | Versioce | GitHub Tag Bump |

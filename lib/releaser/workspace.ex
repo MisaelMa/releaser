@@ -4,14 +4,21 @@ defmodule Releaser.App do
 
   The `publish` field indicates whether this app should be published to Hex.
   Set `releaser: [publish: true]` in the app's `mix.exs` to mark it as publishable.
+
+  The `version_form` field tracks how the version is declared in `mix.exs`:
+    * `:literal` — `version: "1.2.3"`
+    * `:attribute` — `@version "1.2.3"` referenced via `version: @version`
   """
-  defstruct [:name, :path, :version, :deps, publish: false]
+  defstruct [:name, :path, :version, :deps, version_form: :literal, publish: false]
+
+  @type version_form :: :literal | :attribute
 
   @type t :: %__MODULE__{
           name: String.t(),
           path: String.t(),
           version: String.t(),
           deps: [String.t()],
+          version_form: version_form(),
           publish: boolean()
         }
 end
@@ -36,14 +43,22 @@ defmodule Releaser.Workspace do
   def discover(opts \\ []) do
     apps_root = Keyword.get(opts, :apps_root, Releaser.Config.load().apps_root)
 
-    mix_files = Path.wildcard(Path.join([apps_root, "**", "mix.exs"]))
+    mix_files =
+      [apps_root, "**", "mix.exs"]
+      |> Path.join()
+      |> Path.wildcard()
+
+    # Single-app layout: apps_root = "." means the root mix.exs IS the app.
+    mix_files =
+      if apps_root in [".", "./"] and File.exists?("mix.exs") do
+        Enum.uniq(["mix.exs" | mix_files])
+      else
+        mix_files
+      end
 
     apps =
       mix_files
-      |> Enum.reject(fn p ->
-        # Skip the root mix.exs and _build/deps paths
-        String.contains?(p, "_build") or String.contains?(p, "/deps/")
-      end)
+      |> Enum.reject(&ignored_mix_file?/1)
       |> Enum.map(&parse_mix_file/1)
       |> Enum.reject(&is_nil/1)
 
@@ -64,6 +79,17 @@ defmodule Releaser.Workspace do
     discover(opts) |> Enum.find(&(&1.name == name))
   end
 
+  # A mix.exs is ignored when it lives inside build, dep cache, docs,
+  # node_modules or any dotted directory (e.g. .elixir_ls, .git).
+  defp ignored_mix_file?(path) do
+    parts = Path.split(path)
+
+    Enum.any?(parts, fn segment ->
+      segment in ["_build", "deps", "doc", "node_modules", "cover", ".fetch"] or
+        String.starts_with?(segment, ".")
+    end)
+  end
+
   defp parse_mix_file(mix_path) do
     content = File.read!(mix_path)
 
@@ -73,11 +99,7 @@ defmodule Releaser.Workspace do
         _ -> nil
       end
 
-    version =
-      case Regex.run(~r/version:\s+"([^"]+)"/, content) do
-        [_, v] -> v
-        _ -> "0.0.0"
-      end
+    {version, version_form} = extract_version(content)
 
     path_deps =
       Regex.scan(~r/\{:(\w+),\s*path:/, content)
@@ -96,9 +118,29 @@ defmodule Releaser.Workspace do
         name: name,
         path: Path.dirname(mix_path),
         version: version,
+        version_form: version_form,
         deps: path_deps,
         publish: publish?
       }
+    end
+  end
+
+  # Extracts the version string and the form it was declared in.
+  # Preference order:
+  #   1. literal — `version: "1.2.3"`
+  #   2. attribute — `@version "1.2.3"` (referenced via `version: @version`)
+  defp extract_version(content) do
+    cond do
+      match = Regex.run(~r/version:\s+"([^"]+)"/, content) ->
+        [_, v] = match
+        {v, :literal}
+
+      match = Regex.run(~r/@version\s+"([^"]+)"/, content) ->
+        [_, v] = match
+        {v, :attribute}
+
+      true ->
+        {"0.0.0", :literal}
     end
   end
 end

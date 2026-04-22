@@ -1,0 +1,135 @@
+name: Release
+
+# Automated releases driven by Conventional Commits.
+#
+# Behavior per branch:
+#   dev   → bump as pre-release (tag: dev),  no Hex publish
+#   beta  → bump as pre-release (tag: beta), no Hex publish
+#   main  → stable bump, optionally publishes to Hex and creates a GitHub Release
+#
+# Configure in Settings → Actions → Variables:
+#   PUBLISH_TO_HEX    = true|false   (default false)
+#   CREATE_GH_RELEASE = true|false   (default false)
+#
+# Required secret (only when PUBLISH_TO_HEX=true):
+#   HEX_API_KEY
+
+on:
+  push:
+    branches: [dev, beta, main]
+
+permissions:
+  contents: write  # push commits and tags
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Avoid loops: skip commits authored by this workflow.
+    if: "!contains(github.event.head_commit.message, 'chore(release):')"
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Elixir / OTP
+        uses: erlef/setup-beam@v1
+        with:
+          version-file: .tool-versions
+          version-type: strict
+
+      - name: Restore deps cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: Run tests
+        run: mix test
+
+      - name: Compute bump command
+        id: cmd
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            dev)
+              echo "cmd=mix releaser.bump --from-commits --mode prerelease --tag dev --no-hooks" >> $GITHUB_OUTPUT
+              ;;
+            beta)
+              echo "cmd=mix releaser.bump --from-commits --mode prerelease --tag beta --no-hooks" >> $GITHUB_OUTPUT
+              ;;
+            main)
+              echo "cmd=mix releaser.bump --from-commits --no-hooks" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Bump from commits
+        id: bump
+        run: |
+          ${{ steps.cmd.outputs.cmd }}
+
+          if git diff --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No version changes — nothing to release."
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Collect bumped versions
+        if: steps.bump.outputs.changed == 'true'
+        id: tags
+        run: |
+          # Stage mix.exs so HEAD~1 still reflects the previous state for
+          # `--list-bumped` (it shells out to `git show HEAD~1:mix.exs`).
+          TAGS=$(mix releaser.bump --list-bumped)
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Commit, tag, push
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "chore(release): auto-bump on ${GITHUB_REF_NAME}"
+
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            git tag "$tag"
+          done <<< "${{ steps.tags.outputs.tags }}"
+
+          git push
+          git push --tags
+
+      - name: Publish to Hex
+        if: |
+          steps.bump.outputs.changed == 'true' &&
+          github.ref_name == 'main' &&
+          vars.PUBLISH_TO_HEX == 'true'
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          mix local.hex --force
+          mix hex.publish --yes
+
+      - name: Create GitHub Release
+        if: |
+          steps.bump.outputs.changed == 'true' &&
+          github.ref_name == 'main' &&
+          vars.CREATE_GH_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            gh release create "$tag" --generate-notes --title "$tag"
+          done <<< "${{ steps.tags.outputs.tags }}"

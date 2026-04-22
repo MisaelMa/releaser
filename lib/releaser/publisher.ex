@@ -14,7 +14,16 @@ defmodule Releaser.Publisher do
 
   @doc """
   Plans the publish order and returns a list of levels with app info.
-  Does not modify anything.
+
+  Does not modify anything. Filters out apps whose local version is
+  already on Hex (`status == :published`), so publish is idempotent.
+
+  Returns a map with:
+    * `:levels` — topological levels after filtering (only apps that need publishing)
+    * `:apps` — publishable apps with cleaned internal deps
+    * `:graph` — dep graph
+    * `:skipped` — apps filtered out because they're already on Hex (or pre-release).
+      Each entry is `%{app: name, local: v, hex: v, reason: :already_published | :prerelease}`.
   """
   def plan(opts \\ []) do
     all_apps = Workspace.discover(opts)
@@ -28,21 +37,107 @@ defmodule Releaser.Publisher do
         %{app | deps: Enum.filter(app.deps, &MapSet.member?(publishable_names, &1))}
       end)
 
-    levels = Graph.topological_levels(publishable_apps_filtered)
-    graph = Graph.build(publishable_apps_filtered)
+    # Check Hex status for each app (unless caller passes :statuses for tests).
+    statuses =
+      Keyword.get_lazy(opts, :statuses, fn ->
+        compute_statuses(publishable_apps_filtered)
+      end)
+
+    {to_publish, skipped} =
+      Enum.split_with(publishable_apps_filtered, fn app ->
+        case Map.get(statuses, app.name) do
+          %{status: :ahead} -> true
+          %{status: :unpublished} -> true
+          # :published (local <= hex) → skip
+          # :prerelease → skip (we don't auto-publish pre-releases)
+          _ -> false
+        end
+      end)
+
+    skipped_entries =
+      Enum.map(skipped, fn app ->
+        info = Map.get(statuses, app.name, %{local: app.version, hex: nil, status: :unknown})
+
+        reason =
+          case info.status do
+            :prerelease -> :prerelease
+            _ -> :already_published
+          end
+
+        %{app: app.name, local: info.local, hex: info.hex, reason: reason}
+      end)
+
+    levels = Graph.topological_levels(to_publish)
+    graph = Graph.build(to_publish)
 
     only = Keyword.get(opts, :only)
 
     levels =
       if only do
         # Resolve dependents (upstream) — who depends on the apps I changed?
-        required = Graph.transitive_dependents(only, publishable_apps_filtered)
+        required = Graph.transitive_dependents(only, to_publish)
         Graph.filter_levels(levels, required)
       else
         levels
       end
 
-    %{levels: levels, apps: publishable_apps_filtered, graph: graph}
+    %{
+      levels: levels,
+      apps: to_publish,
+      graph: graph,
+      skipped: skipped_entries
+    }
+  end
+
+  defp compute_statuses(apps) do
+    Enum.into(apps, %{}, fn app ->
+      hex_version = hex_version_for(app.name)
+      status = compute_status(app.version, hex_version)
+
+      {app.name,
+       %{
+         local: app.version,
+         hex: hex_version,
+         status: status
+       }}
+    end)
+  end
+
+  defp hex_version_for(app_name) do
+    # Re-uses HexStatus internals by calling it per-app. We go through
+    # `System.cmd/3` directly to avoid scanning the whole workspace.
+    case System.cmd("mix", ["hex.info", app_name], stderr_to_stdout: true) do
+      {output, 0} ->
+        case Regex.run(~r/Releases:\s*(\S+)/, output) do
+          [_, versions_str] ->
+            versions_str
+            |> String.split(",")
+            |> List.first()
+            |> String.trim()
+
+          _ ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp compute_status(_local, nil), do: :unpublished
+
+  defp compute_status(local, hex) do
+    v = Version.parse(local)
+
+    if Version.prerelease?(v) do
+      :prerelease
+    else
+      case Elixir.Version.compare(local, hex) do
+        :gt -> :ahead
+        :eq -> :published
+        :lt -> :published
+      end
+    end
   end
 
   @doc """
@@ -70,7 +165,7 @@ defmodule Releaser.Publisher do
 
           # 1. Bump version if requested
           new_version = maybe_bump(app.version, bump_type)
-          content = replace_version(original, app.version, new_version)
+          content = replace_version(original, app.version, new_version, app.version_form)
 
           # 2. Replace path deps with hex versions
           deps = Map.get(graph, name, [])
@@ -165,9 +260,13 @@ defmodule Releaser.Publisher do
     end
   end
 
-  defp replace_version(content, old_v, new_v) when old_v == new_v, do: content
+  defp replace_version(content, old_v, new_v, _form) when old_v == new_v, do: content
 
-  defp replace_version(content, old_v, new_v) do
+  defp replace_version(content, old_v, new_v, :attribute) do
+    String.replace(content, ~s(@version "#{old_v}"), ~s(@version "#{new_v}"), global: false)
+  end
+
+  defp replace_version(content, old_v, new_v, _form) do
     String.replace(content, ~s(version: "#{old_v}"), ~s(version: "#{new_v}"), global: false)
   end
 
