@@ -133,4 +133,60 @@ defmodule Releaser.GraphTest do
       assert [{0, ["openssl"]}, {1, ["csd"]}] = filtered
     end
   end
+
+  describe "level_map/1" do
+    test "multi-level input returns name => level map" do
+      levels = [{0, ["c", "d"]}, {1, ["b"]}, {2, ["a"]}]
+      assert Graph.level_map(levels) == %{"a" => 2, "b" => 1, "c" => 0, "d" => 0}
+    end
+
+    test "empty input returns empty map" do
+      assert Graph.level_map([]) == %{}
+    end
+
+    test "single level (all leaves)" do
+      levels = [{0, ["x", "y"]}]
+      assert Graph.level_map(levels) == %{"x" => 0, "y" => 0}
+    end
+  end
+
+  describe "dep_count/2" do
+    test "known name with deps returns count" do
+      graph = %{"a" => ["b", "c"], "b" => ["c"], "c" => []}
+      assert Graph.dep_count("a", graph) == 2
+    end
+
+    test "known name with no deps returns 0" do
+      graph = %{"a" => ["b"], "b" => []}
+      assert Graph.dep_count("b", graph) == 0
+    end
+
+    test "unknown name returns 0" do
+      graph = %{"a" => ["b"]}
+      assert Graph.dep_count("z", graph) == 0
+    end
+  end
+
+  describe "deep_count/2" do
+    test "3-node chain: a→b→c — a has 1, b has 0" do
+      graph = %{"a" => ["b"], "b" => ["c"], "c" => []}
+      assert Graph.deep_count("a", graph) == 1
+      assert Graph.deep_count("b", graph) == 0
+    end
+
+    test "leaf node returns 0" do
+      graph = %{"a" => ["b"], "b" => []}
+      assert Graph.deep_count("b", graph) == 0
+    end
+
+    test "unknown name returns 0" do
+      graph = %{"a" => ["b"]}
+      assert Graph.deep_count("z", graph) == 0
+    end
+
+    test "multiple qualifying direct deps" do
+      graph = %{"root" => ["x", "y", "z"], "x" => ["a"], "y" => ["b"], "z" => []}
+      assert Graph.deep_count("root", graph) == 2
+    end
+  end
 end

@@ -1,0 +1,47 @@
+schema: spec-driven
+
+context: |
+  Tech stack: Elixir 1.17.3 / OTP 27, Mix, single-app library targeting Hex
+  Architecture: Releaser.* core modules in lib/releaser/, Mix tasks in lib/mix/tasks/, hooks in lib/releaser/hooks/
+  Testing: ExUnit, tests in test/releaser/<module>_test.exs (mirror lib layout)
+  Style: mix format (built-in, no .formatter.exs); no credo or dialyxir installed
+  Conventions: Conventional Commits MANDATORY (.githooks/commit-msg → mix releaser.check_commit_msg)
+  CI: .github/workflows/release.yml on dev/beta/main; releaser self-publishes via mix releaser.bump
+
+strict_tdd: true
+
+testing:
+  runner: mix test
+  framework: ExUnit
+  layers:
+    unit: ExUnit
+    integration: not_installed
+    e2e: not_installed
+  coverage: mix test --cover
+  linter: not_installed
+  type_checker: not_installed
+  formatter: mix format
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+    - Identify affected modules/packages
+  specs:
+    - Use Given/When/Then format for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Include sequence diagrams for complex flows
+    - Document architecture decisions with rationale
+  tasks:
+    - Group tasks by phase (infrastructure, implementation, testing)
+    - Use hierarchical numbering (1.1, 1.2, etc.)
+    - Keep tasks small enough to complete in one session
+  apply:
+    - Follow existing code patterns and conventions
+    - Strict TDD: failing test first, then implementation, then refactor
+    - Never add Co-Authored-By or AI attribution to commits
+  verify:
+    - Run `mix test` to validate all scenarios
+    - Compare implementation against every spec scenario
+  archive:
+    - Warn before merging destructive deltas (large removals)

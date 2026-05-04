@@ -12,6 +12,8 @@ defmodule Releaser.UI do
   def cyan(text), do: "#{IO.ANSI.cyan()}#{text}#{IO.ANSI.reset()}"
   def red(text), do: "#{IO.ANSI.red()}#{text}#{IO.ANSI.reset()}"
   def dim(text), do: "#{IO.ANSI.faint()}#{text}#{IO.ANSI.reset()}"
+  def magenta(text), do: "#{IO.ANSI.magenta()}#{text}#{IO.ANSI.reset()}"
+  def blue(text), do: "#{IO.ANSI.blue()}#{text}#{IO.ANSI.reset()}"
 
   def arrow(old, new), do: "#{yellow(old)} → #{green(new)}"
 

@@ -5,6 +5,11 @@ defmodule Releaser.Graph do
   Builds a directed graph from internal `path:` dependencies and provides
   topological ordering for correct publish order, dependency resolution,
   and cascade planning.
+
+  New annotation helpers (for rendering):
+  - `level_map/1` — inverts a `topological_levels/1` result into a `%{name => level}` map.
+  - `dep_count/2` — returns the count of direct project-internal deps for a given name.
+  - `deep_count/2` — shallow count of a name's direct deps that themselves have at least one dep.
   """
 
   alias Releaser.App
@@ -125,6 +130,71 @@ defmodule Releaser.Graph do
         |> then(&collect_dependents(dep, dep_map, &1))
       end
     end)
+  end
+
+  @type name :: String.t()
+  @type graph :: %{name() => [name()]}
+  @type levels :: [{non_neg_integer(), [name()]}]
+
+  @doc """
+  Inverts the `topological_levels/1` result into a name-keyed map for O(1) level lookups.
+
+  ## Examples
+
+      iex> Graph.level_map([{0, ["c", "d"]}, {1, ["b"]}, {2, ["a"]}])
+      %{"a" => 2, "b" => 1, "c" => 0, "d" => 0}
+
+      iex> Graph.level_map([])
+      %{}
+  """
+  @spec level_map(levels()) :: %{name() => non_neg_integer()}
+  def level_map(levels) when is_list(levels) do
+    Enum.reduce(levels, %{}, fn {level, names}, acc ->
+      Enum.reduce(names, acc, fn name, a -> Map.put(a, name, level) end)
+    end)
+  end
+
+  @doc """
+  Returns the count of direct project-internal deps for a given app name.
+
+  Returns `0` for unknown names (not present in the graph).
+
+  ## Examples
+
+      iex> Graph.dep_count("a", %{"a" => ["b", "c"], "b" => ["c"], "c" => []})
+      2
+
+      iex> Graph.dep_count("z", %{"a" => ["b"]})
+      0
+  """
+  @spec dep_count(name(), graph()) :: non_neg_integer()
+  def dep_count(name, graph) when is_binary(name) and is_map(graph) do
+    Map.get(graph, name, []) |> length()
+  end
+
+  @doc """
+  Shallow count of `name`'s direct deps that themselves have at least one project-internal dep.
+
+  SHALLOW count, NOT a recursive depth metric. For a chain `a→b→c` where `c` has no deps:
+  - `deep_count("a", graph)` is `1` (b has deps)
+  - `deep_count("b", graph)` is `0` (c has no deps)
+
+  See ADR D4 in the design document.
+
+  Returns `0` for leaves and unknown names.
+
+  ## Examples
+
+      iex> graph = %{"a" => ["b"], "b" => ["c"], "c" => []}
+      iex> Graph.deep_count("a", graph)
+      1
+      iex> Graph.deep_count("b", graph)
+      0
+  """
+  @spec deep_count(name(), graph()) :: non_neg_integer()
+  def deep_count(name, graph) when is_binary(name) and is_map(graph) do
+    Map.get(graph, name, [])
+    |> Enum.count(fn dep -> Map.get(graph, dep, []) != [] end)
   end
 
   @doc """

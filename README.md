@@ -201,15 +201,31 @@ mix releaser.graph
 │       ▼
 ┌── Level 2 ──┐
 │   cfdi_xml v4.0.18
-│   └─ depends on: cfdi_csd, cfdi_transform, ...
+│   └─ depends on: cfdi_csd[1][1][0], cfdi_transform[1][1][0], cfdi_complementos
 │   sat_auth v1.0.1
-│   └─ depends on: cfdi_csd
+│   └─ depends on: cfdi_csd[1][1][0]
 │       ▼
 ┌── Level 3 ──┐
 │   cfdi_cancelacion v0.0.1
-│   └─ depends on: sat_auth
+│   └─ depends on: sat_auth[2][1][1]
 └── end ──┘
 ```
+
+### Reading the dep annotations
+
+Each project-internal dep is rendered as `<name>[level][count][deep]`:
+
+| Bracket | Meaning |
+|---------|---------|
+| `[level]` | Topological level of that dep (0 = leaf, no project deps). Colored per level — cycle: 0→cyan, 1→green, 2→yellow, 3→magenta, 4→red, 5→blue, then `rem(level, 6)` repeats. |
+| `[count]` | Number of direct project-internal deps that the dep itself has. |
+| `[deep]` | Of those `[count]` deps, how many themselves have at least one project-internal dep. **Shallow** (one level of look-ahead), not recursive. |
+
+**Clean mode**: when all three values are zero (a true leaf with no project deps), the dep prints as a bare name with no brackets — see `cfdi_complementos` in the example above.
+
+**Why this matters**: at a glance you know if editing a dep cascades. `cfdi_csd[1][1][0]` means level 1, has 1 project dep, and that dep is a leaf — safe to edit in isolation. `sat_auth[2][1][1]` means level 2, has 1 project dep, and that dep itself has more project deps — editing reaches deeper into the graph.
+
+Only the levels view is annotated. The dependents-tree form (`mix releaser.graph <app>`) is unchanged.
 
 Show dependents of a specific app:
 

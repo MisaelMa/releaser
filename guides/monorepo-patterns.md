@@ -324,3 +324,28 @@ $ mix releaser.graph
 # Level 1 → testear después de level 0
 # etc.
 ```
+
+### Leer las anotaciones de deps
+
+Cada dep interna del proyecto se imprime como `<nombre>[level][count][deep]`:
+
+- `[level]` — nivel topológico de esa dep (0 = leaf). Coloreado por nivel:
+  0→cyan, 1→green, 2→yellow, 3→magenta, 4→red, 5→blue, ciclo `rem(level, 6)`.
+- `[count]` — cantidad de deps internas que esa dep tiene.
+- `[deep]` — de esas `[count]`, cuántas tienen a su vez deps internas
+  (look-ahead de **un nivel**, no recursivo).
+
+Las hojas reales (level 0, count 0, deep 0) se imprimen como **nombre pelado
+sin corchetes**. Solo aplica a la vista por niveles; la forma
+`mix releaser.graph <app>` (árbol de dependientes) no se anota.
+
+Ejemplo:
+
+```
+cfdi_xml v4.0.18
+└─ depends on: cfdi_csd[1][1][0], cfdi_transform[1][1][0], cfdi_complementos
+```
+
+`cfdi_complementos` no tiene corchetes → es leaf, editarlo no cascadea.
+`cfdi_csd[1][1][0]` está en level 1, tiene 1 dep interna (que es leaf) →
+editar `cfdi_csd` cascadea solo a `cfdi_xml` y demás dependientes directos.
