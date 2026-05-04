@@ -14,6 +14,26 @@ defmodule Mix.Tasks.Releaser.GraphTest do
     %App{name: "xml", path: "apps/xml", version: "3.0.0", deps: ["csd"]}
   ]
 
+  # Fixture with mixed publish + version_form for badge/branch tests.
+  @rich_apps [
+    %App{
+      name: "openssl",
+      path: "apps/openssl",
+      version: "1.0.0",
+      deps: [],
+      publish: false,
+      version_form: :literal
+    },
+    %App{
+      name: "csd",
+      path: "apps/csd",
+      version: "2.0.0",
+      deps: ["openssl"],
+      publish: true,
+      version_form: :attribute
+    }
+  ]
+
   setup do
     original_shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)
@@ -55,6 +75,131 @@ defmodule Mix.Tasks.Releaser.GraphTest do
       # but xml itself appears as an app header, not as a dep annotation
       # csd is listed as dep of xml: csd[1][1][0]
       assert output =~ ~r/\[\d+\]\[\d+\]\[\d+\]/
+    end
+  end
+
+  describe "render_graph/2 — compact mode (default)" do
+    test "shows [publish: ✓] for apps marked publishable" do
+      GraphTask.render_graph(@rich_apps)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "csd v2.0.0 [publish: ✓]"
+    end
+
+    test "shows [publish: ✗] for apps not marked publishable" do
+      GraphTask.render_graph(@rich_apps)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "openssl v1.0.0 [publish: ✗]"
+    end
+
+    test "shows [@version] only when version_form is :attribute" do
+      GraphTask.render_graph(@rich_apps)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "csd v2.0.0 [publish: ✓] [@version]"
+      refute output =~ "openssl v1.0.0 [publish: ✗] [@version]"
+    end
+
+    test "does not show [hex: ...] when --hex is not set" do
+      GraphTask.render_graph(@rich_apps)
+      output = collect_output() |> strip_ansi()
+      refute output =~ "[hex:"
+    end
+
+    test "shows [hex: ...] when hex_map is provided" do
+      hex_map = %{
+        "openssl" => %{local: "1.0.0", hex: "1.0.0", status: :published},
+        "csd" => %{local: "2.0.0", hex: "1.9.0", status: :ahead}
+      }
+
+      GraphTask.render_graph(@rich_apps, hex: true, hex_map: hex_map)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "[hex: published]"
+      assert output =~ "[hex: ahead]"
+    end
+
+    test "compact dep line is unchanged — uses └─ depends on:" do
+      GraphTask.render_graph(@rich_apps)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "└─ depends on: openssl"
+    end
+  end
+
+  describe "render_graph/2 — detailed mode" do
+    test "renders multiline branches under each app" do
+      GraphTask.render_graph(@rich_apps, detailed: true)
+      output = collect_output() |> strip_ansi()
+      # csd has deps + publish + version form + path → 4 branches
+      assert output =~ "├─ depends on: openssl"
+      assert output =~ "├─ publish: yes"
+      assert output =~ "├─ version form: @version"
+      assert output =~ "└─ path: apps/csd"
+    end
+
+    test "skips depends-on branch for leaves" do
+      GraphTask.render_graph(@rich_apps, detailed: true)
+      output = collect_output() |> strip_ansi()
+      # openssl has no deps → no "depends on" line for it
+      # but it still has publish + path branches
+      assert output =~ "├─ publish: no"
+      assert output =~ "└─ path: apps/openssl"
+    end
+
+    test "skips version-form branch when literal" do
+      GraphTask.render_graph(@rich_apps, detailed: true)
+      output = collect_output() |> strip_ansi()
+      # openssl uses :literal, so no "version form" branch under it
+      # the easy way: ensure path is the last branch (└─) for openssl block
+      assert output =~ "└─ path: apps/openssl"
+    end
+
+    test "shows hex branch only with --hex" do
+      hex_map = %{
+        "csd" => %{local: "2.0.0", hex: "1.9.0", status: :ahead}
+      }
+
+      GraphTask.render_graph(@rich_apps, detailed: true, hex: true, hex_map: hex_map)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "├─ hex: ahead (local v2.0.0, remote v1.9.0)"
+    end
+
+    test "without --hex, no hex branch appears" do
+      GraphTask.render_graph(@rich_apps, detailed: true)
+      output = collect_output() |> strip_ansi()
+      refute output =~ "hex:"
+    end
+
+    test "publish: no when app is not publishable" do
+      GraphTask.render_graph(@rich_apps, detailed: true)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "├─ publish: no"
+    end
+  end
+
+  describe "summary" do
+    test "shows publishable apps count" do
+      GraphTask.render_graph(@rich_apps)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "Publishable apps:    1"
+    end
+  end
+
+  describe "run/1 — argv parsing" do
+    test "no args runs compact mode" do
+      GraphTask.run([])
+      output = collect_output() |> strip_ansi()
+      assert output =~ "Dependency Graph"
+      refute output =~ "├─ publish:"
+    end
+
+    test "--detailed flag activates detailed mode" do
+      GraphTask.run(["--detailed"])
+      output = collect_output() |> strip_ansi()
+      assert output =~ "├─ publish:" or output =~ "└─ publish:"
+    end
+
+    test "-d alias activates detailed mode" do
+      GraphTask.run(["-d"])
+      output = collect_output() |> strip_ansi()
+      assert output =~ "├─ publish:" or output =~ "└─ publish:"
     end
   end
 

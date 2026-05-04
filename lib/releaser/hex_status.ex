@@ -15,10 +15,17 @@ defmodule Releaser.HexStatus do
   Returns a list of maps with `:app`, `:local`, `:hex`, and `:status` keys.
   """
   def check(opts \\ []) do
-    apps = Workspace.discover(opts)
+    Workspace.discover(opts) |> check_apps()
+  end
 
-    apps
-    |> Enum.map(fn app ->
+  @doc """
+  Like `check/1` but operates on an already-discovered list of apps.
+
+  Skips the `Workspace.discover/1` call so callers (e.g. renderers) that
+  already hold the workspace can avoid scanning `mix.exs` files twice.
+  """
+  def check_apps(apps) when is_list(apps) do
+    Enum.map(apps, fn app ->
       hex_version = fetch_hex_version(app.name)
       status = compute_status(app.version, hex_version)
 
