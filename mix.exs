@@ -12,7 +12,8 @@ defmodule Releaser.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       package: package(),
-      description: "Monorepo versioning, changelog, and Hex publishing for Elixir poncho/umbrella projects",
+      description:
+        "Monorepo versioning, changelog, and Hex publishing for Elixir poncho/umbrella projects",
       releaser: [
         apps_root: ".",
         publish: true,
