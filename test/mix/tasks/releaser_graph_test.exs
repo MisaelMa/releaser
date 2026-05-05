@@ -79,10 +79,12 @@ defmodule Mix.Tasks.Releaser.GraphTest do
   end
 
   describe "render_graph/2 — compact mode (default)" do
-    test "shows [publish: ✓] for apps marked publishable" do
+    test "shows [publish: ✗ blocked] for apps blocked by non-publishable deps" do
+      # Intentional inversion: csd is blocked by openssl (publish: false).
+      # See openspec/changes/block-publish-non-publishable-deps for rationale.
       GraphTask.render_graph(@rich_apps)
       output = collect_output() |> strip_ansi()
-      assert output =~ "csd v2.0.0 [publish: ✓]"
+      assert output =~ "csd v2.0.0 [publish: ✗ blocked]"
     end
 
     test "shows [publish: ✗] for apps not marked publishable" do
@@ -92,9 +94,10 @@ defmodule Mix.Tasks.Releaser.GraphTest do
     end
 
     test "shows [@version] only when version_form is :attribute" do
+      # Intentional inversion: csd is blocked, so its publish badge is `✗ blocked`.
       GraphTask.render_graph(@rich_apps)
       output = collect_output() |> strip_ansi()
-      assert output =~ "csd v2.0.0 [publish: ✓] [@version]"
+      assert output =~ "csd v2.0.0 [publish: ✗ blocked] [@version]"
       refute output =~ "openssl v1.0.0 [publish: ✗] [@version]"
     end
 
@@ -125,11 +128,12 @@ defmodule Mix.Tasks.Releaser.GraphTest do
 
   describe "render_graph/2 — detailed mode" do
     test "renders multiline branches under each app" do
+      # Intentional inversion: csd was `publish: yes`; now blocked by openssl.
       GraphTask.render_graph(@rich_apps, detailed: true)
       output = collect_output() |> strip_ansi()
       # csd has deps + publish + version form + path → 4 branches
       assert output =~ "├─ depends on: openssl"
-      assert output =~ "├─ publish: yes"
+      assert output =~ "├─ publish: blocked (needs: openssl)"
       assert output =~ "├─ version form: @version"
       assert output =~ "└─ path: apps/csd"
     end
@@ -175,10 +179,118 @@ defmodule Mix.Tasks.Releaser.GraphTest do
   end
 
   describe "summary" do
-    test "shows publishable apps count" do
+    test "shows publishable apps count and blocked apps count" do
+      # Intentional inversion: csd was counted as publishable; now blocked.
       GraphTask.render_graph(@rich_apps)
       output = collect_output() |> strip_ansi()
+      assert output =~ "Publishable apps:    0"
+      assert output =~ "Blocked apps:        1"
+    end
+
+    test "omits 'Blocked apps:' line when no apps are blocked" do
+      safe_apps = [
+        %App{
+          name: "safe",
+          path: "apps/safe",
+          version: "1.0.0",
+          deps: [],
+          publish: true,
+          version_form: :literal
+        }
+      ]
+
+      GraphTask.render_graph(safe_apps)
+      output = collect_output() |> strip_ansi()
       assert output =~ "Publishable apps:    1"
+      refute output =~ "Blocked apps:"
+    end
+  end
+
+  describe "blocking — compact" do
+    test "non-publishable app keeps [publish: ✗] without 'blocked' word" do
+      GraphTask.render_graph(@rich_apps)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "openssl v1.0.0 [publish: ✗]"
+      refute output =~ ~r/openssl[^\n]*blocked/
+    end
+
+    test "safe publishable app with no deps shows [publish: ✓]" do
+      safe_apps = [
+        %App{
+          name: "safe",
+          path: "apps/safe",
+          version: "1.0.0",
+          deps: [],
+          publish: true,
+          version_form: :literal
+        }
+      ]
+
+      GraphTask.render_graph(safe_apps)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "safe v1.0.0 [publish: ✓]"
+      refute output =~ "blocked"
+    end
+  end
+
+  describe "blocking — detailed" do
+    test "safe publishable app shows 'publish: yes' in detailed mode" do
+      safe_apps = [
+        %App{
+          name: "safe",
+          path: "apps/safe",
+          version: "1.0.0",
+          deps: [],
+          publish: true,
+          version_form: :literal
+        }
+      ]
+
+      GraphTask.render_graph(safe_apps, detailed: true)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "publish: yes"
+      refute output =~ "blocked"
+    end
+
+    test "blocked app shows 'publish: blocked (needs: ...)' with multiple dep names" do
+      apps = [
+        %App{name: "x", path: "apps/x", version: "1.0.0", deps: [], publish: false},
+        %App{name: "y", path: "apps/y", version: "1.0.0", deps: [], publish: false},
+        %App{name: "a", path: "apps/a", version: "1.0.0", deps: ["x", "y"], publish: true}
+      ]
+
+      GraphTask.render_graph(apps, detailed: true)
+      output = collect_output() |> strip_ansi()
+      assert output =~ ~r/publish: blocked \(needs: (x, y|y, x)\)/
+    end
+  end
+
+  describe "blocking — summary mixed" do
+    test "shows Publishable apps: 1 and Blocked apps: 1 with mixed fixture" do
+      apps = [
+        %App{name: "openssl", path: "apps/openssl", version: "1.0.0", deps: [], publish: false},
+        %App{
+          name: "csd",
+          path: "apps/csd",
+          version: "2.0.0",
+          deps: ["openssl"],
+          publish: true,
+          version_form: :literal
+        },
+        %App{
+          name: "safe",
+          path: "apps/safe",
+          version: "1.0.0",
+          deps: [],
+          publish: true,
+          version_form: :literal
+        }
+      ]
+
+      GraphTask.render_graph(apps)
+      output = collect_output() |> strip_ansi()
+      assert output =~ "Publishable apps:    1"
+      assert output =~ "Blocked apps:        1"
     end
   end
 

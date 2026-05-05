@@ -23,7 +23,11 @@ defmodule Mix.Tasks.Releaser.Graph do
 
   Badges:
 
-  - `[publish: ✓/✗]` — always shown; `✓` when the app has `releaser: [publish: true]`.
+  - `[publish: ✓]` (green) — `releaser: [publish: true]` and no blocking deps.
+  - `[publish: ✗]` (dim) — app is not marked publishable (`publish: false` or absent).
+  - `[publish: ✗ blocked]` (red) — marked publishable but at least one direct or
+    transitive internal dep is non-publishable. The app would never reach Hex
+    correctly, so `mix releaser.publish` excludes it (see `Releaser.Publisher`).
   - `[hex: ...]` — only with `--hex`. Possible values: `ahead`, `published`, `unpub`, `pre`.
   - `[@version]` — only when the app declares `@version` (vs. literal `version: "..."`).
 
@@ -37,6 +41,20 @@ defmodule Mix.Tasks.Releaser.Graph do
       ├─ hex: ahead (local v1.0.1, remote v1.0.0)
       ├─ version form: @version
       └─ path: apps/sat_auth
+
+  When an app is blocked by non-publishable deps, the `publish` branch becomes
+  `publish: blocked (needs: dep1, dep2)` listing the immediate blocking deps.
+
+  ## Summary
+
+  After the levels view, a summary block reports counts:
+
+      Total apps:          N
+      Levels:              N
+      Apps with path deps: N
+      Publishable apps:    N    # subtracts blocked apps
+      Blocked apps:        N    # only shown when > 0
+      Publish order:       level 0 → level N
 
   ## Annotation format (deps)
 
@@ -53,7 +71,7 @@ defmodule Mix.Tasks.Releaser.Graph do
 
   use Mix.Task
 
-  alias Releaser.{Graph, Workspace, UI, HexStatus}
+  alias Releaser.{Graph, Workspace, UI, HexStatus, Publisher}
 
   @switches [detailed: :boolean, hex: :boolean]
   @aliases [d: :detailed]
@@ -109,6 +127,9 @@ defmodule Mix.Tasks.Releaser.Graph do
     lmap = Graph.level_map(levels)
     total_levels = length(levels)
 
+    blocked_reasons = Publisher.blocked_with_reasons(apps)
+    blocked_names = blocked_reasons |> Map.keys() |> MapSet.new()
+
     UI.info("\n#{UI.bright("╔══════════════════════════════════════════════════╗")}")
     UI.info("#{UI.bright("║           Dependency Graph                       ║")}")
     UI.info("#{UI.bright("╚══════════════════════════════════════════════════╝")}\n")
@@ -126,11 +147,13 @@ defmodule Mix.Tasks.Releaser.Graph do
       Enum.each(app_names, fn name ->
         app = Enum.find(apps, &(&1.name == name))
         deps = Map.get(graph, name, [])
+        blocked? = MapSet.member?(blocked_names, name)
+        block_deps = Map.get(blocked_reasons, name, [])
 
         if detailed? do
-          render_app_detailed(app, deps, graph, lmap, hex?, hex_map)
+          render_app_detailed(app, deps, graph, lmap, hex?, hex_map, blocked?, block_deps)
         else
-          render_app_compact(app, deps, graph, lmap, hex?, hex_map)
+          render_app_compact(app, deps, graph, lmap, hex?, hex_map, blocked?)
         end
       end)
 
@@ -146,19 +169,22 @@ defmodule Mix.Tasks.Releaser.Graph do
 
     total = Enum.reduce(levels, 0, fn {_, names}, acc -> acc + length(names) end)
     with_deps = Enum.count(apps, &(&1.deps != []))
-    publishable = Enum.count(apps, & &1.publish)
+    publishable_total = Enum.count(apps, & &1.publish)
+    blocked_count = MapSet.size(blocked_names)
+    publishable = publishable_total - blocked_count
 
     UI.info("\n#{UI.bright("Summary:")}")
     UI.info("  Total apps:          #{total}")
     UI.info("  Levels:              #{total_levels}")
     UI.info("  Apps with path deps: #{with_deps}")
     UI.info("  Publishable apps:    #{publishable}")
+    if blocked_count > 0, do: UI.info("  Blocked apps:        #{blocked_count}")
     UI.info("  Publish order:       level 0 → level #{total_levels - 1}")
     UI.info("")
   end
 
-  defp render_app_compact(app, deps, graph, lmap, hex?, hex_map) do
-    badges = compact_badges(app, hex?, hex_map)
+  defp render_app_compact(app, deps, graph, lmap, hex?, hex_map, blocked?) do
+    badges = compact_badges(app, hex?, hex_map, blocked?)
 
     UI.info(
       "#{UI.cyan("│")}   #{UI.green(app.name)} #{UI.yellow("v#{app.version}")}#{badges}"
@@ -170,10 +196,10 @@ defmodule Mix.Tasks.Releaser.Graph do
     end
   end
 
-  defp compact_badges(app, hex?, hex_map) do
+  defp compact_badges(app, hex?, hex_map, blocked?) do
     badges =
       [
-        publish_badge_compact(app.publish),
+        publish_badge_compact(app.publish, blocked?),
         if(hex?, do: hex_badge_compact(Map.get(hex_map, app.name))),
         if(app.version_form == :attribute, do: UI.dim("[@version]"))
       ]
@@ -185,8 +211,9 @@ defmodule Mix.Tasks.Releaser.Graph do
     end
   end
 
-  defp publish_badge_compact(true), do: UI.green("[publish: ✓]")
-  defp publish_badge_compact(_), do: UI.dim("[publish: ✗]")
+  defp publish_badge_compact(true, true), do: UI.red("[publish: ✗ blocked]")
+  defp publish_badge_compact(true, false), do: UI.green("[publish: ✓]")
+  defp publish_badge_compact(_, _), do: UI.dim("[publish: ✗]")
 
   defp hex_badge_compact(nil), do: UI.dim("[hex: ?]")
   defp hex_badge_compact(%{status: :ahead}), do: UI.green("[hex: ahead]")
@@ -194,13 +221,13 @@ defmodule Mix.Tasks.Releaser.Graph do
   defp hex_badge_compact(%{status: :unpublished}), do: UI.yellow("[hex: unpub]")
   defp hex_badge_compact(%{status: :prerelease}), do: UI.magenta("[hex: pre]")
 
-  defp render_app_detailed(app, deps, graph, lmap, hex?, hex_map) do
+  defp render_app_detailed(app, deps, graph, lmap, hex?, hex_map, blocked?, block_deps) do
     UI.info("#{UI.cyan("│")}   #{UI.green(app.name)} #{UI.yellow("v#{app.version}")}")
 
     lines =
       [
         deps_line_detailed(deps, graph, lmap),
-        {"publish", publish_text_detailed(app.publish)},
+        {"publish", publish_text_detailed(app.publish, blocked?, block_deps)},
         if(hex?, do: {"hex", hex_text_detailed(Map.get(hex_map, app.name))}),
         if(app.version_form == :attribute, do: {"version form", UI.dim("@version")}),
         {"path", UI.dim(app.path)}
@@ -223,8 +250,11 @@ defmodule Mix.Tasks.Releaser.Graph do
     {"depends on", dep_str}
   end
 
-  defp publish_text_detailed(true), do: UI.green("yes")
-  defp publish_text_detailed(_), do: UI.dim("no")
+  defp publish_text_detailed(true, true, block_deps),
+    do: UI.red("blocked") <> UI.dim(" (needs: #{Enum.join(block_deps, ", ")})")
+
+  defp publish_text_detailed(true, false, _), do: UI.green("yes")
+  defp publish_text_detailed(_, _, _), do: UI.dim("no")
 
   defp hex_text_detailed(nil), do: UI.dim("unknown")
 

@@ -45,24 +45,7 @@ defmodule Mix.Tasks.Releaser.Publish do
     UI.info("\n#{UI.bright("=== Releaser Publish ===")}\n")
 
     # Report skipped apps first so the user knows why some are missing.
-    if skipped != [] do
-      UI.info(UI.bright("Skipping (nothing new to publish):"))
-
-      Enum.each(skipped, fn %{app: name, local: local, hex: hex, reason: reason} ->
-        label =
-          case reason do
-            :already_published ->
-              "already on Hex (local v#{local} matches Hex v#{hex || "?"})"
-
-            :prerelease ->
-              "pre-release local v#{local}"
-          end
-
-        UI.info("  #{name}  — #{label}")
-      end)
-
-      UI.info("")
-    end
+    render_skipped(skipped)
 
     if levels == [] do
       UI.info(UI.green("All apps are up to date on Hex. Nothing to publish.\n"))
@@ -87,6 +70,35 @@ defmodule Mix.Tasks.Releaser.Publish do
         Publisher.execute(publish_opts)
       end
     end
+  end
+
+  @doc """
+  Renders the skipped section of a publish plan.
+
+  Public so the publish-task tests can drive it with synthetic skipped
+  entries without going through `Publisher.plan/1`.
+  """
+  def render_skipped([]), do: :ok
+
+  def render_skipped(skipped) when is_list(skipped) do
+    UI.info(UI.bright("Skipping (nothing new to publish):"))
+
+    Enum.each(skipped, fn entry ->
+      UI.info("  #{entry.app}  — #{skipped_label(entry)}")
+    end)
+
+    UI.info("")
+  end
+
+  defp skipped_label(%{reason: :already_published, local: local, hex: hex}),
+    do: "already on Hex (local v#{local} matches Hex v#{hex || "?"})"
+
+  defp skipped_label(%{reason: :prerelease, local: local}),
+    do: "pre-release local v#{local}"
+
+  defp skipped_label(%{reason: :blocked_by_deps} = entry) do
+    deps = Map.get(entry, :blocked_by, []) |> Enum.join(", ")
+    "blocked by non-publishable deps: #{deps}"
   end
 
   defp show_dry_run(levels, apps, graph, bump_type) do

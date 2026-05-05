@@ -8,9 +8,92 @@ defmodule Releaser.Publisher do
   3. Injects `package/0` metadata if missing
   4. Runs `mix hex.publish --yes`
   5. Restores the original `mix.exs` (always, even on failure)
+
+  ## Blocking detection
+
+  An app marked `releaser: [publish: true]` cannot actually be published to Hex
+  if any of its direct or transitive internal deps is `publish: false` — the
+  resulting Hex package would reference a path dep that has no Hex counterpart.
+
+  `plan/1` detects this and excludes blocked apps from the publish plan,
+  surfacing them in the `:skipped` list with `reason: :blocked_by_deps` and a
+  `:blocked_by` field listing the IMMEDIATE non-publishable causes.
+
+  Two public helpers are exposed for external consumers (e.g. `mix releaser.graph`):
+
+  - `blocked_names/1` — returns the `MapSet` of blocked app names.
+  - `blocked_with_reasons/1` — returns `%{name => [immediate_blocker, ...]}`.
+
+  Both run an iterative worklist (fixed-point over the blocked set) so cycles
+  among publishable apps terminate, and transitive blocking is discovered
+  level by level. Worst case is `O(apps * deps)` per iteration with at most
+  `length(apps)` iterations — i.e. cubic in app count, which is fine for
+  monorepos with hundreds of apps.
   """
 
   alias Releaser.{Graph, Version, Workspace, UI}
+
+  @doc """
+  Returns the set of publishable app names that cannot be published because at
+  least one direct or transitive internal dep is non-publishable (`publish: false`).
+
+  Apps with `publish: false` are NEVER members of the returned set — they are
+  causes, not effects. Cycles among publishable apps terminate via fixed-point
+  iteration (the blocked set is monotone-growing and bounded by `length(apps)`).
+  """
+  @spec blocked_names([Releaser.App.t()]) :: MapSet.t(String.t())
+  def blocked_names(apps) when is_list(apps) do
+    apps
+    |> blocked_with_reasons()
+    |> Map.keys()
+    |> MapSet.new()
+  end
+
+  @doc """
+  Returns a map `%{blocked_app_name => [immediate_blocking_dep_name, ...]}`.
+
+  Same algorithm as `blocked_names/1`, but exposes WHY each blocked app is
+  blocked. The list contains only deps from the app's own `:deps` field that
+  are themselves either `publish: false` OR already known to be blocked. It is
+  the IMMEDIATE cause, NOT the transitive root.
+  """
+  @spec blocked_with_reasons([Releaser.App.t()]) :: %{String.t() => [String.t()]}
+  def blocked_with_reasons(apps) when is_list(apps) do
+    publishable_apps = Enum.filter(apps, & &1.publish)
+
+    non_publishable_names =
+      apps
+      |> Enum.reject(& &1.publish)
+      |> MapSet.new(& &1.name)
+
+    do_blocked(publishable_apps, non_publishable_names, MapSet.new(), %{})
+  end
+
+  defp do_blocked(publishable_apps, non_publishable_names, blocked_set, reasons) do
+    {next_blocked, next_reasons, grew?} =
+      Enum.reduce(publishable_apps, {blocked_set, reasons, false}, fn app, {bset, racc, grew} ->
+        if MapSet.member?(bset, app.name) do
+          {bset, racc, grew}
+        else
+          blocking =
+            Enum.filter(app.deps, fn dep ->
+              MapSet.member?(non_publishable_names, dep) or MapSet.member?(bset, dep)
+            end)
+
+          if blocking == [] do
+            {bset, racc, grew}
+          else
+            {MapSet.put(bset, app.name), Map.put(racc, app.name, blocking), true}
+          end
+        end
+      end)
+
+    if grew? do
+      do_blocked(publishable_apps, non_publishable_names, next_blocked, next_reasons)
+    else
+      next_reasons
+    end
+  end
 
   @doc """
   Plans the publish order and returns a list of levels with app info.
@@ -20,31 +103,33 @@ defmodule Releaser.Publisher do
 
   Returns a map with:
     * `:levels` — topological levels after filtering (only apps that need publishing)
-    * `:apps` — publishable apps with cleaned internal deps
+    * `:apps` — publishable apps that survived blocking and Hex status checks
     * `:graph` — dep graph
-    * `:skipped` — apps filtered out because they're already on Hex (or pre-release).
-      Each entry is `%{app: name, local: v, hex: v, reason: :already_published | :prerelease}`.
+    * `:skipped` — apps filtered out, each entry `%{app: name, local: v, hex: v, reason: r}`
+      where `r` is one of:
+        * `:already_published` / `:prerelease` — Hex-status driven
+        * `:blocked_by_deps` — at least one direct or transitive internal dep is
+          non-publishable. Carries an extra `:blocked_by` field with the
+          IMMEDIATE blocking dep names.
   """
   def plan(opts \\ []) do
     all_apps = Workspace.discover(opts)
-    # Only publishable apps participate in the publish plan
     publishable_apps = Enum.filter(all_apps, & &1.publish)
-    # Filter deps to only reference other publishable apps
-    publishable_names = MapSet.new(publishable_apps, & &1.name)
 
-    publishable_apps_filtered =
-      Enum.map(publishable_apps, fn app ->
-        %{app | deps: Enum.filter(app.deps, &MapSet.member?(publishable_names, &1))}
-      end)
+    blocked_reasons = blocked_with_reasons(all_apps)
+    blocked_set = blocked_reasons |> Map.keys() |> MapSet.new()
+
+    {blocked_apps, candidate_apps} =
+      Enum.split_with(publishable_apps, &MapSet.member?(blocked_set, &1.name))
 
     # Check Hex status for each app (unless caller passes :statuses for tests).
     statuses =
       Keyword.get_lazy(opts, :statuses, fn ->
-        compute_statuses(publishable_apps_filtered)
+        compute_statuses(candidate_apps)
       end)
 
-    {to_publish, skipped} =
-      Enum.split_with(publishable_apps_filtered, fn app ->
+    {to_publish, hex_skipped} =
+      Enum.split_with(candidate_apps, fn app ->
         case Map.get(statuses, app.name) do
           %{status: :ahead} -> true
           %{status: :unpublished} -> true
@@ -54,8 +139,19 @@ defmodule Releaser.Publisher do
         end
       end)
 
-    skipped_entries =
-      Enum.map(skipped, fn app ->
+    blocked_skipped_entries =
+      Enum.map(blocked_apps, fn app ->
+        %{
+          app: app.name,
+          local: app.version,
+          hex: nil,
+          reason: :blocked_by_deps,
+          blocked_by: Map.fetch!(blocked_reasons, app.name)
+        }
+      end)
+
+    hex_skipped_entries =
+      Enum.map(hex_skipped, fn app ->
         info = Map.get(statuses, app.name, %{local: app.version, hex: nil, status: :unknown})
 
         reason =
@@ -66,6 +162,8 @@ defmodule Releaser.Publisher do
 
         %{app: app.name, local: info.local, hex: info.hex, reason: reason}
       end)
+
+    skipped_entries = blocked_skipped_entries ++ hex_skipped_entries
 
     levels = Graph.topological_levels(to_publish)
     graph = Graph.build(to_publish)
