@@ -239,6 +239,34 @@ defmodule Releaser.PublisherTest do
       refute Enum.any?(result.skipped, &(&1.reason == :blocked_by_deps))
     end
 
+    test "--only filter applies after blocking removal" do
+      root = make_tmp_root()
+      write_app!(root, "openssl", "1.0.0", publish: false)
+      write_app!(root, "csd", "2.0.0", deps: ["openssl"])
+      write_app!(root, "safe", "1.0.0")
+      write_app!(root, "another", "1.0.0")
+
+      statuses = %{
+        "safe" => %{local: "1.0.0", hex: nil, status: :unpublished},
+        "another" => %{local: "1.0.0", hex: nil, status: :unpublished}
+      }
+
+      result = plan(root, statuses, only: ["safe"])
+
+      # csd is blocked → in skipped regardless of --only
+      assert Enum.any?(result.skipped, &(&1.app == "csd" and &1.reason == :blocked_by_deps))
+
+      # only "safe" appears in levels (--only filter ran on post-blocking list)
+      level_names = Enum.flat_map(result.levels, fn {_lvl, names} -> names end)
+      assert "safe" in level_names
+      refute "csd" in level_names
+
+      # candidate_apps still contains both publishable+unblocked apps; --only only filters levels
+      app_names = Enum.map(result.apps, & &1.name)
+      assert "safe" in app_names
+      refute "csd" in app_names
+    end
+
     test "non-publishable apps are not part of skipped entries" do
       root = make_tmp_root()
       write_app!(root, "openssl", "1.0.0", publish: false)

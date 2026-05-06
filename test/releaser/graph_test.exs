@@ -59,6 +59,49 @@ defmodule Releaser.GraphTest do
         assert Map.get(graph, name, []) == []
       end)
     end
+
+    test "treats deps outside the input set as already satisfied" do
+      # Reproduces the publish-subset bug: when callers filter to a subset of
+      # apps (e.g. `Publisher.plan/1` skipping already-on-Hex apps), the
+      # remaining apps still reference deps that are NOT in the subset. Those
+      # external deps must be treated as satisfied — they are NOT a missing
+      # ordering constraint and must NOT trigger a false circular_dependency.
+      apps = [
+        %App{
+          name: "cfdi",
+          path: "p/cfdi",
+          version: "1.0.0",
+          deps: ["sat_certificados", "cfdi_xml", "sat_catalogos"]
+        },
+        %App{
+          name: "sat_certificados",
+          path: "p/sat",
+          version: "1.0.0",
+          deps: ["clir_openssl"]
+        }
+      ]
+
+      assert [{0, ["sat_certificados"]}, {1, ["cfdi"]}] = Graph.topological_levels(apps)
+    end
+
+    test "single app with only external deps lands at level 0" do
+      apps = [
+        %App{name: "a", path: "p/a", version: "1.0.0", deps: ["external_only"]}
+      ]
+
+      assert [{0, ["a"]}] = Graph.topological_levels(apps)
+    end
+
+    test "raises Mix.Error with actionable message on a real cycle" do
+      apps = [
+        %App{name: "a", path: "p/a", version: "1.0.0", deps: ["b"]},
+        %App{name: "b", path: "p/b", version: "1.0.0", deps: ["a"]}
+      ]
+
+      assert_raise Mix.Error, ~r/[Cc]ircular dependency.*\ba\b.*\bb\b/s, fn ->
+        Graph.topological_levels(apps)
+      end
+    end
   end
 
   describe "transitive_deps/2" do

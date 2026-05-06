@@ -43,8 +43,20 @@ defmodule Releaser.Graph do
   level 1 depends only on level 0, etc.
   """
   def topological_levels(apps) when is_list(apps) do
-    graph = build(apps)
     all_names = MapSet.new(apps, & &1.name)
+
+    # Restrict each app's deps to those present in the input set. Deps that
+    # point outside the set (e.g. apps already on Hex when the publisher
+    # filters its plan) are external constraints — already satisfied — and
+    # must NOT participate in topological ordering. Otherwise a clean DAG
+    # gets misreported as circular.
+    graph =
+      apps
+      |> build()
+      |> Map.new(fn {name, deps} ->
+        {name, Enum.filter(deps, &MapSet.member?(all_names, &1))}
+      end)
+
     do_levels(all_names, graph, 0, [])
   end
 
@@ -64,7 +76,17 @@ defmodule Releaser.Graph do
         |> Enum.sort()
 
       if ready == [] do
-        {:error, :circular_dependency, MapSet.to_list(remaining)}
+        cycle = remaining |> MapSet.to_list() |> Enum.sort()
+
+        Mix.raise("""
+        Circular dependency detected between apps:
+
+            #{Enum.join(cycle, " ↔ ")}
+
+        Hex packages cannot be published with circular path: deps. Inspect
+        each app's mix.exs and break the cycle (e.g. extract shared code
+        into a third app, or invert one of the dependencies).
+        """)
       else
         new_remaining = MapSet.difference(remaining, MapSet.new(ready))
         do_levels(new_remaining, graph, level + 1, [{level, ready} | acc])
