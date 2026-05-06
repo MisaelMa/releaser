@@ -182,9 +182,37 @@ defmodule Releaser.Publisher do
     %{
       levels: levels,
       apps: to_publish,
+      all_apps: all_apps,
       graph: graph,
       skipped: skipped_entries
     }
+  end
+
+  @doc """
+  Resolves the version to use when rewriting a `path:` dep to a Hex dep.
+
+  Order of preference:
+
+    1. `pub_acc` — apps just published in this run (newest known version).
+    2. `all_apps` — full workspace, including apps that `Publisher.plan/1`
+       filtered out (e.g. already-on-Hex deps) whose `app.version` matches
+       what is on Hex.
+    3. Fallback `"0.0.0"` only when nothing else is known. This is the
+       last-resort sentinel and should never be reached in a healthy
+       workspace.
+
+  This helper exists to fix a bug where `find_version/2` was called with
+  the post-filter `to_publish` list, returning `"0.0.0"` for any dep that
+  was filtered out because it was already on Hex.
+  """
+  @spec resolve_dep_version(String.t(), %{String.t() => String.t()}, [Releaser.App.t()]) ::
+          String.t()
+  def resolve_dep_version(dep_name, pub_acc, all_apps)
+      when is_binary(dep_name) and is_map(pub_acc) and is_list(all_apps) do
+    case Map.fetch(pub_acc, dep_name) do
+      {:ok, v} -> v
+      :error -> find_version(all_apps, dep_name)
+    end
   end
 
   defp compute_statuses(apps) do
@@ -242,7 +270,7 @@ defmodule Releaser.Publisher do
   Executes the publish flow.
   """
   def execute(opts \\ []) do
-    %{levels: levels, apps: apps, graph: graph} = plan(opts)
+    %{levels: levels, apps: apps, all_apps: all_apps, graph: graph} = plan(opts)
     bump_type = Keyword.get(opts, :bump)
     org = Keyword.get(opts, :org)
     config = Releaser.Config.load()
@@ -251,7 +279,11 @@ defmodule Releaser.Publisher do
     ensure_hex_auth!()
 
     published = %{}
-    backups = []
+    # Backup the workspace lockfile up front. `mix deps.get` (run before each
+    # `hex.publish` to fetch the rewritten hex deps) mutates this file, and we
+    # must restore it alongside the mix.exs files so the user's workspace
+    # returns to its `path:`-resolved state.
+    backups = lockfile_backup()
 
     {_pub, backups} =
       Enum.reduce(levels, {published, backups}, fn {level, app_names}, {pub, bkps} ->
@@ -272,7 +304,7 @@ defmodule Releaser.Publisher do
 
           content =
             Enum.reduce(deps, content, fn dep, c ->
-              dep_version = Map.get(pub_acc, dep, find_version(apps, dep))
+              dep_version = resolve_dep_version(dep, pub_acc, all_apps)
               replace_path_dep(c, dep, dep_version)
             end)
 
@@ -282,7 +314,23 @@ defmodule Releaser.Publisher do
           # 4. Write modified mix.exs
           File.write!(mix_path, content)
 
-          # 5. Publish (streaming output so the user sees progress live)
+          # 5. Fetch hex deps for the rewritten mix.exs. Without this step,
+          # `mix hex.publish` aborts with "Unchecked dependencies for environment
+          # dev" because the deps cache still has the old `path:` shape.
+          UI.info("Fetching hex deps for #{name}...")
+
+          case run_streaming("mix", ["deps.get"], app.path) do
+            0 ->
+              :ok
+
+            code ->
+              UI.error("\nmix deps.get failed for #{name} (exit #{code}).")
+              UI.info("\n#{UI.yellow("Restoring workspace files...")}")
+              restore(bkp_acc)
+              Mix.raise("Publish aborted for #{name}: mix deps.get failed. Workspace restored.")
+          end
+
+          # 6. Publish (streaming output so the user sees progress live)
           UI.info("Publishing #{name} v#{new_version}...")
           org_args = if org, do: ["--organization", org], else: []
 
@@ -293,16 +341,37 @@ defmodule Releaser.Publisher do
 
             code ->
               UI.error("\nFailed to publish #{name} (exit #{code}).")
-              UI.info("\n#{UI.yellow("Restoring all mix.exs files...")}")
+              UI.info("\n#{UI.yellow("Restoring workspace files...")}")
               restore(bkp_acc)
-              Mix.raise("Publish failed for #{name}. All mix.exs files have been restored.")
+              Mix.raise("Publish failed for #{name}. Workspace files have been restored.")
           end
         end)
       end)
 
-    UI.info("\n#{UI.bright("Restoring mix.exs files to path: deps...")}")
+    UI.info("\n#{UI.bright("Restoring workspace files (mix.exs + mix.lock)...")}")
     restore(backups)
-    UI.info("#{UI.green("All done! #{length(backups)} package(s) published.")}\n")
+    published_count = length(backups) - lockfile_entry_count(backups)
+    UI.info("#{UI.green("All done! #{published_count} package(s) published.")}\n")
+  end
+
+  # Reads the workspace lockfile (if present) and returns it as a single-element
+  # backup list. Returns `[]` when no lockfile exists at the cwd, which is the
+  # case for first-run workspaces or per-app lockfile setups.
+  defp lockfile_backup do
+    path = Path.join(File.cwd!(), "mix.lock")
+
+    if File.exists?(path) do
+      [{path, File.read!(path)}]
+    else
+      []
+    end
+  end
+
+  # Counts how many entries in `backups` are the workspace lockfile (0 or 1).
+  # Used so the "N package(s) published" tally reports app count, not file count.
+  defp lockfile_entry_count(backups) do
+    lockfile = Path.join(File.cwd!(), "mix.lock")
+    Enum.count(backups, fn {p, _} -> p == lockfile end)
   end
 
   @doc "Restores backed-up mix.exs files."

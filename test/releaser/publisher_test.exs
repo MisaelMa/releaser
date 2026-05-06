@@ -280,6 +280,51 @@ defmodule Releaser.PublisherTest do
     end
   end
 
+  describe "plan/1 — all_apps and version resolution for hex-skipped deps" do
+    test "plan/1 returns :all_apps containing apps that were filtered out by Hex status" do
+      root = make_tmp_root()
+      # `clir_openssl` is already on Hex → filtered out of `:apps`/`:levels`,
+      # but MUST remain accessible via `:all_apps` so the rewrite step can
+      # resolve its real version.
+      write_app!(root, "clir_openssl", "4.0.1")
+      write_app!(root, "sat_certificados", "4.0.1", deps: ["clir_openssl"])
+
+      statuses = %{
+        "clir_openssl" => %{local: "4.0.1", hex: "4.0.1", status: :published},
+        "sat_certificados" => %{local: "4.0.1", hex: nil, status: :unpublished}
+      }
+
+      result = plan(root, statuses)
+
+      app_names = Enum.map(result.apps, & &1.name)
+      refute "clir_openssl" in app_names
+
+      all_app_names = Enum.map(result.all_apps, & &1.name)
+      assert "clir_openssl" in all_app_names
+      assert "sat_certificados" in all_app_names
+    end
+
+    test "resolve_dep_version/3 returns pub_acc value when present" do
+      apps = [
+        %App{name: "dep", path: "p/dep", version: "9.9.9", deps: [], publish: true}
+      ]
+
+      assert Publisher.resolve_dep_version("dep", %{"dep" => "1.2.3"}, apps) == "1.2.3"
+    end
+
+    test "resolve_dep_version/3 falls back to all_apps for hex-skipped deps" do
+      apps = [
+        %App{name: "clir_openssl", path: "p", version: "4.0.1", deps: [], publish: true}
+      ]
+
+      assert Publisher.resolve_dep_version("clir_openssl", %{}, apps) == "4.0.1"
+    end
+
+    test "resolve_dep_version/3 returns 0.0.0 when dep is unknown" do
+      assert Publisher.resolve_dep_version("ghost", %{}, []) == "0.0.0"
+    end
+  end
+
   describe "blocked_names/1" do
     test "returns app with direct non-publishable dep" do
       apps = [
