@@ -270,7 +270,7 @@ For each package (in dependency order):
 
 1. Backup `mix.exs`
 2. Bump version (if `--bump`)
-3. Replace `{:dep, path: "..."}` → `{:dep, "~> X.Y"}`
+3. Replace `{:dep, path: "..."}` or `{:dep, in_umbrella: true}` → `{:dep, "~> X.Y"}`
 4. Inject `package/0` if missing
 5. `mix hex.publish --yes`
 6. Restore original `mix.exs` (always, even on failure)

@@ -4,7 +4,7 @@ defmodule Releaser.Publisher do
 
   For each app (in dependency order):
   1. Backs up the original `mix.exs`
-  2. Replaces `path:` deps with their published Hex versions (`~> X.Y`)
+  2. Replaces `path:` and `in_umbrella:` deps with their published Hex versions (`~> X.Y`)
   3. Injects `package/0` metadata if missing
   4. Runs `mix hex.publish --yes`
   5. Restores the original `mix.exs` (always, even on failure)
@@ -233,17 +233,34 @@ defmodule Releaser.Publisher do
     # Re-uses HexStatus internals by calling it per-app. We go through
     # `System.cmd/3` directly to avoid scanning the whole workspace.
     case System.cmd("mix", ["hex.info", app_name], stderr_to_stdout: true) do
-      {output, 0} ->
-        case Regex.run(~r/Releases:\s*(\S+)/, output) do
-          [_, versions_str] ->
-            versions_str
-            |> String.split(",")
-            |> List.first()
-            |> String.trim()
+      {output, 0} -> parse_hex_version(output)
+      _ -> nil
+    end
+  end
 
-          _ ->
-            nil
-        end
+  @doc """
+  Extrae la versión más reciente del output de `mix hex.info`.
+
+  El Hex CLI cambió el formato a lo largo del tiempo:
+
+      viejo → "Releases: 4.0.1, 4.0.0"          (versiones en una línea)
+      nuevo → "Recent releases:\\n  4.0.1 (…)"  (versión en línea aparte)
+
+  El flag `i` y la `\\s*` —que cruza el salto de línea— cubren ambos. La
+  versión más reciente siempre aparece primero. Devuelve `nil` si el
+  output no contiene una sección de releases reconocible.
+
+  Es pública (y pura) para poder testear el parseo sin tocar la red ni
+  `System.cmd/3`.
+  """
+  @spec parse_hex_version(String.t()) :: String.t() | nil
+  def parse_hex_version(output) when is_binary(output) do
+    case Regex.run(~r/releases:\s*(\S+)/i, output) do
+      [_, versions_str] ->
+        versions_str
+        |> String.split(",")
+        |> List.first()
+        |> String.trim()
 
       _ ->
         nil
@@ -384,12 +401,11 @@ defmodule Releaser.Publisher do
   def replace_path_dep(content, dep_name, dep_version) do
     v = Version.parse(dep_version)
     mm = Version.major_minor(v)
+    hex_dep = "{:#{dep_name}, \"~> #{mm}\"}"
 
-    Regex.replace(
-      ~r/\{:#{dep_name},\s*path:\s*"[^"]*"\}/,
-      content,
-      "{:#{dep_name}, \"~> #{mm}\"}"
-    )
+    content
+    |> then(&Regex.replace(~r/\{:#{dep_name},\s*path:\s*"[^"]*"\}/, &1, hex_dep))
+    |> then(&Regex.replace(~r/\{:#{dep_name},\s*in_umbrella:\s*true\}/, &1, hex_dep))
   end
 
   def ensure_package_config(content, pkg_defaults) do

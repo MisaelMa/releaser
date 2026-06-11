@@ -114,7 +114,7 @@ defmodule Mix.Tasks.Releaser.Publish do
             dep_version = Map.get(pub_acc, dep, find_version(apps, dep))
             v = Version.parse(dep_version)
             mm = Version.major_minor(v)
-            UI.info("  {:#{dep}, path: \"...\"} → {:#{dep}, \"~> #{mm}\"}")
+            UI.info("  {:#{dep}, path/in_umbrella: ...} → {:#{dep}, \"~> #{mm}\"}")
           end)
 
           UI.info("")

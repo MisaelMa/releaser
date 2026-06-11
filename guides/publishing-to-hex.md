@@ -5,16 +5,18 @@ the correct order, handling internal dependencies automatically.
 
 ## The problem
 
-In a monorepo, packages depend on each other via `path:` references:
+In a monorepo, packages depend on each other via `path:` or `in_umbrella:` references:
 
 ```elixir
 # apps/api/mix.exs
 defp deps do
   [{:my_core, path: "../core"}]
+  # or in an umbrella:
+  # {:my_core, in_umbrella: true}
 end
 ```
 
-But Hex doesn't understand `path:` — it needs version constraints:
+But Hex doesn't understand `path:` or `in_umbrella:` — it needs version constraints:
 
 ```elixir
 {:my_core, "~> 1.1"}
@@ -69,7 +71,7 @@ $ mix releaser.publish
 For each package (in dependency order), Releaser:
 
 1. Backs up the original `mix.exs`
-2. Replaces `{:my_core, path: "../core"}` → `{:my_core, "~> 1.1"}`
+2. Replaces `{:my_core, path: "../core"}` or `{:my_core, in_umbrella: true}` → `{:my_core, "~> 1.1"}`
 3. Injects `package/0` with license and links if missing
 4. Runs `mix hex.publish --yes`
 5. Restores the original `mix.exs`

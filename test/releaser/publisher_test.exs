@@ -384,6 +384,34 @@ defmodule Releaser.PublisherTest do
     end
   end
 
+  describe "replace_path_dep/3" do
+    test "rewrites path dep to hex constraint" do
+      content = ~s|[{:my_core, path: "../my_core"}]|
+
+      result = Publisher.replace_path_dep(content, "my_core", "1.2.3")
+
+      assert result =~ ~s|{:my_core, "~> 1.2"}|
+      refute result =~ "path:"
+    end
+
+    test "rewrites in_umbrella dep to hex constraint" do
+      content = ~s|[{:my_core, in_umbrella: true}]|
+
+      result = Publisher.replace_path_dep(content, "my_core", "1.0.0")
+
+      assert result =~ ~s|{:my_core, "~> 1.0"}|
+      refute result =~ "in_umbrella"
+    end
+
+    test "prefers path rewrite when both forms appear (path wins first)" do
+      content = ~s|[{:my_core, path: "../my_core"}, {:my_core, in_umbrella: true}]|
+
+      result = Publisher.replace_path_dep(content, "my_core", "2.0.0")
+
+      assert [_, _] = Regex.scan(~r/\{:my_core, "~> 2\.0"\}/, result)
+    end
+  end
+
   describe "blocked_with_reasons/1" do
     test "returns map with immediate causes only — not transitive root" do
       apps = [
@@ -405,6 +433,32 @@ defmodule Releaser.PublisherTest do
 
       assert %{"a" => deps} = Publisher.blocked_with_reasons(apps)
       assert Enum.sort(deps) == ["x", "y"]
+    end
+  end
+
+  describe "parse_hex_version/1" do
+    test "parses the new Hex CLI format (Recent releases, version on next line)" do
+      output = """
+      Complementos fiscales del SAT para CFDI 4.0
+
+      Config: {:cfdi_complementos, "~> 4.0"}
+
+      Recent releases:
+        4.0.3 (2026-05-07)
+        4.0.2 (2026-05-07)
+        4.0.1 (2026-05-06)
+      """
+
+      assert Publisher.parse_hex_version(output) == "4.0.3"
+    end
+
+    test "parses the legacy single-line format (Releases: a, b, c)" do
+      output = "Releases: 4.0.1, 4.0.0, 3.9.0\n"
+      assert Publisher.parse_hex_version(output) == "4.0.1"
+    end
+
+    test "returns nil when there is no releases section" do
+      assert Publisher.parse_hex_version("No package with name foo\n") == nil
     end
   end
 end
