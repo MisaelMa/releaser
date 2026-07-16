@@ -163,6 +163,28 @@ defmodule Releaser.Version do
   def set(version) when is_binary(version), do: parse(version)
 
   @doc """
+  Extracts the version string declared in `mix.exs` source, or `nil` if absent.
+
+  Handles both declaration forms: `version: "1.2.3"` and `@version "1.2.3"`.
+  Useful for reading a version out of a file that is not on disk — e.g. the
+  contents of `git show HEAD:apps/foo/mix.exs`.
+  """
+  def extract_from_source(content) when is_binary(content) do
+    cond do
+      match = Regex.run(~r/version:\s+"([^"]+)"/, content) ->
+        [_, v] = match
+        v
+
+      match = Regex.run(~r/@version\s+"([^"]+)"/, content) ->
+        [_, v] = match
+        v
+
+      true ->
+        nil
+    end
+  end
+
+  @doc """
   Returns the base version string without pre-release or build metadata.
   """
   def base_string(%__MODULE__{major: maj, minor: min, patch: pat}) do

@@ -69,6 +69,32 @@ defmodule Releaser.Git do
     end
   end
 
+  @doc "Returns every tag in the repository. Empty list if none or not a git repo."
+  def tags do
+    case cmd(["tag", "--list"]) do
+      {output, 0} ->
+        output
+        |> String.split("\n", trim: true)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+
+      _ ->
+        []
+    end
+  end
+
+  @doc """
+  Reads a file's contents at a given revision, e.g. `show("HEAD:apps/foo/mix.exs")`.
+
+  Returns `{:ok, contents}` or `:error` when the path does not exist at that revision.
+  """
+  def show(revision_path) do
+    case cmd(["show", revision_path]) do
+      {content, 0} -> {:ok, content}
+      _ -> :error
+    end
+  end
+
   @doc "Returns true if the working tree has uncommitted changes."
   def dirty? do
     case cmd(["status", "--porcelain"]) do

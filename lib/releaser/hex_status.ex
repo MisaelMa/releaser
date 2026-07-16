@@ -38,6 +38,12 @@ defmodule Releaser.HexStatus do
     end)
   end
 
+  @doc """
+  Returns the latest version of `app_name` published on Hex, or `nil` when the
+  package is unpublished or the registry is unreachable.
+  """
+  def published_version(app_name), do: fetch_hex_version(app_name)
+
   defp fetch_hex_version(app_name) do
     case System.cmd("mix", ["hex.info", app_name], stderr_to_stdout: true) do
       {output, 0} ->

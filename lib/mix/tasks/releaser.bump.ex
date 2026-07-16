@@ -200,11 +200,13 @@ defmodule Mix.Tasks.Releaser.Bump do
           |> Version.bump(bump_type, tag: tag, build: build)
           |> to_string()
 
-        changes = Cascade.plan(app_name, new_version, apps, cascade: cascade?)
+        %{changes: changes, pending: pending} =
+          Cascade.plan_all(app_name, new_version, apps, cascade: cascade?)
+
         context = build_context(app, bump_type, new_version, changes, apps)
 
         if not no_hooks?, do: run_pre_hooks(context)
-        print_and_apply(changes, dry_run?)
+        print_and_apply(changes, pending, dry_run?)
         if not dry_run? and not no_hooks?, do: run_post_hooks(context)
     end
   end
@@ -253,11 +255,14 @@ defmodule Mix.Tasks.Releaser.Bump do
           UI.info("#{app_name} is already at a stable version (#{app.version})")
         else
           new_version = v |> Version.release() |> to_string()
-          changes = Cascade.plan(app_name, new_version, apps, cascade: cascade?)
+
+          %{changes: changes, pending: pending} =
+            Cascade.plan_all(app_name, new_version, apps, cascade: cascade?)
+
           context = build_context(app, :release, new_version, changes, apps)
 
           if not no_hooks?, do: run_pre_hooks(context)
-          print_and_apply(changes, dry_run?)
+          print_and_apply(changes, pending, dry_run?)
           if not dry_run? and not no_hooks?, do: run_post_hooks(context)
         end
     end
@@ -278,11 +283,14 @@ defmodule Mix.Tasks.Releaser.Bump do
 
       app ->
         new_version = version_string
-        changes = Cascade.plan(app_name, new_version, apps, cascade: cascade?)
+
+        %{changes: changes, pending: pending} =
+          Cascade.plan_all(app_name, new_version, apps, cascade: cascade?)
+
         context = build_context(app, :explicit, new_version, changes, apps)
 
         if not no_hooks?, do: run_pre_hooks(context)
-        print_and_apply(changes, dry_run?)
+        print_and_apply(changes, pending, dry_run?)
         if not dry_run? and not no_hooks?, do: run_post_hooks(context)
     end
   end
@@ -291,7 +299,7 @@ defmodule Mix.Tasks.Releaser.Bump do
   # Rendering / hooks
   # ---------------------------------------------------------------------------
 
-  defp print_and_apply(changes, dry_run?) do
+  defp print_and_apply(changes, pending, dry_run?) do
     config = Releaser.Config.load()
 
     UI.info("")
@@ -300,6 +308,8 @@ defmodule Mix.Tasks.Releaser.Bump do
     Enum.each(changes, fn %{app: name, old: old, new: new, reason: reason} ->
       UI.info("  #{String.pad_trailing(name, 25)} #{UI.arrow(old, new)}  (#{reason})")
     end)
+
+    print_pending(pending)
 
     if dry_run? do
       UI.info("\n#{UI.cyan("--dry-run: no files modified")}\n")
@@ -313,6 +323,21 @@ defmodule Mix.Tasks.Releaser.Bump do
 
       UI.info("\n#{UI.green("#{length(changes)} app(s) updated")}\n")
     end
+  end
+
+  # Dependents skipped because they already have an unpublished bump. They still
+  # ship in this cycle, so they are shown — silence would read as "left out".
+  defp print_pending([]), do: :ok
+
+  defp print_pending(pending) do
+    UI.info("\n#{UI.bright("Already staged (not re-bumped):")}")
+
+    Enum.each(pending, fn %{app: name, version: version, baseline: baseline} ->
+      UI.info(
+        "  #{String.pad_trailing(name, 25)} #{UI.cyan(version)}  " <>
+          UI.dim("(pending since #{baseline})")
+      )
+    end)
   end
 
   defp build_context(app, bump_type, new_version, changes, apps) do
